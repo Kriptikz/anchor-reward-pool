@@ -27,6 +27,9 @@ describe('anchor-reward-pool', () => {
   // Create our mint authority keypair
   const mintAuthority = anchor.web3.Keypair.generate();
 
+  // Create our pool keypair
+  const pool1Keypair = anchor.web3.Keypair.generate();
+
   // Declare the mint for our Reward Token
   let mintRewardToken;
 
@@ -107,17 +110,17 @@ describe('anchor-reward-pool', () => {
     console.log("Pool Creators Reward Tokens in wallet: ", poolCreatorRewardTokenAccountAmount / (10 ** DECIMALS));
     assert.equal(poolCreatorRewardTokenAccountAmount, AMOUNT_OF_REWARD_TOKENS_TO_MINT);
 
+    // Print our Public Keys 
+    console.log("Pool1 Pubkey: ", pool1Keypair.publicKey.toString());
+    console.log("User1 Pubkey: ", user1.publicKey.toString());
+
   });
 
   it('Creates a pool', async () => {
-    // Create our pool keypair
-    const poolKeypair = anchor.web3.Keypair.generate();
-
-    //console.log("poolKeypair PK: ", poolKeypair.publicKey.toString());
 
     // Find our pool signer PDA
     const [poolSigner, poolNonce] = await anchor.web3.PublicKey.findProgramAddress(
-      [poolKeypair.publicKey.toBuffer()],
+      [pool1Keypair.publicKey.toBuffer()],
       program.programId,
     );
 
@@ -139,11 +142,11 @@ describe('anchor-reward-pool', () => {
             rewardMint: mintRewardToken.publicKey,
             rewardVault: rewardVault,
             poolSigner: poolSigner,
-            pool: poolKeypair.publicKey,
+            pool: pool1Keypair.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: anchor.web3.SystemProgram.programId,
           },
-          signers: [poolKeypair, poolCreator]
+          signers: [pool1Keypair, poolCreator]
         }
       ),
       "confirmed"
@@ -154,6 +157,47 @@ describe('anchor-reward-pool', () => {
 
   });
 
+  it('Creates a Staking Account for the User', async () => {
+    const [user1UserAccountAddress, user1UserAccountNonce] = await anchor.web3.PublicKey.findProgramAddress(
+      [user1.publicKey.toBuffer(), pool1Keypair.publicKey.toBuffer()],
+      program.programId
+    )
 
+    await provider.connection.confirmTransaction(
+      await program.rpc.createUser(
+        user1UserAccountNonce,
+        {
+          accounts: {
+            pool: pool1Keypair.publicKey,
+            user: user1UserAccountAddress,
+            owner: user1.publicKey,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          },
+          signers: [user1]
+        }
+      ),
+      "confirmed"
+    );
+
+    await printUserAccountData(user1UserAccountAddress);
+
+  });
+
+  // Utility Functions
+  async function printUserAccountData(userAccountAddress) {
+    let userAccount = await program.account.user.fetch(userAccountAddress);
+    let poolPubkey = userAccount.pool.toString();
+    let owner = userAccount.owner.toString();
+    let rewardPerTokenComplete = userAccount.rewardPerTokenComplete.toNumber();
+    let rewardPerTokenPending = userAccount.rewardPerTokenPending.toNumber();
+    let balanceStaked = userAccount.balanceStaked.toNumber();
+
+    console.log("------ User Account Data ------");
+    console.log("Pool Pubkey: ", poolPubkey);
+    console.log("owner: ", owner);
+    console.log("Reward Per Token Complete: ", rewardPerTokenComplete);
+    console.log("Reward Per Token Pending: ", rewardPerTokenPending);
+    console.log("Balance Staked: ", balanceStaked);
+  }
 
 });

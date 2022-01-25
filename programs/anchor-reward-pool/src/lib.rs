@@ -30,6 +30,22 @@ pub mod anchor_reward_pool {
 
         Ok(())
     }
+
+    pub fn create_user(ctx: Context<CreateUser>, nonce: u8) -> ProgramResult {
+        let user = &mut ctx.accounts.user;
+
+        user.pool = *ctx.accounts.pool.to_account_info().key;
+        user.owner = *ctx.accounts.owner.key;
+        user.reward_per_token_complete = 0;
+        user.reward_per_token_pending = 0;
+        user.balance_staked = 0;
+        user.nonce = nonce;
+
+        let pool = &mut ctx.accounts.pool;
+        pool.user_stake_count = pool.user_stake_count.checked_add(1).unwrap();
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -64,6 +80,24 @@ pub struct InitializePool<'info> {
     system_program: Program<'info, System>
 }
 
+#[derive(Accounts)]
+#[instruction(nonce: u8)]
+pub struct CreateUser<'info> {
+    #[account(mut)]
+    pool: Account<'info, Pool>,
+    #[account(
+        init,
+        payer = owner,
+        seeds = [owner.key.as_ref(), pool.to_account_info().key.as_ref()],
+        bump = nonce)]
+    user: Account<'info, User>,
+    #[account(mut)]
+    owner: Signer<'info>,
+    system_program: Program<'info, System>,
+}
+
+
+
 #[account]
 #[derive(Default)]
 pub struct Pool {
@@ -94,6 +128,7 @@ pub struct Pool {
 }
 
 #[account]
+#[derive(Default)]
 pub struct User {
     // The pool this user belongs to
     pool: Pubkey,
