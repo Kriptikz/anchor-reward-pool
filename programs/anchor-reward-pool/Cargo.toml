@@ -18,3 +18,4 @@ default = []
 [dependencies]
 anchor-lang = "0.20.0"
 anchor-spl = "0.20.0"
+spl-math = { version = "0.1.0", features = ["no-entrypoint"] }
