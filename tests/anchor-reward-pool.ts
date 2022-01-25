@@ -40,7 +40,7 @@ describe('anchor-reward-pool', () => {
   let poolCreatorRewardTokenAccount;
 
   it('Test Set Up!', async () => {
-    // Airdrop 5 Sol to payer, mintAuthority, and user
+    // Airdrop 5 Sol to payer, mintAuthority, poolCreator, and user
     await provider.connection.confirmTransaction(
       await provider.connection.requestAirdrop(payer.publicKey, 5 * anchor.web3.LAMPORTS_PER_SOL),
       "confirmed"
@@ -51,6 +51,10 @@ describe('anchor-reward-pool', () => {
     );
     await provider.connection.confirmTransaction(
       await provider.connection.requestAirdrop(user1.publicKey, 5 * anchor.web3.LAMPORTS_PER_SOL),
+      "confirmed"
+    );
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(poolCreator.publicKey, 5 * anchor.web3.LAMPORTS_PER_SOL),
       "confirmed"
     );
     
@@ -104,4 +108,52 @@ describe('anchor-reward-pool', () => {
     assert.equal(poolCreatorRewardTokenAccountAmount, AMOUNT_OF_REWARD_TOKENS_TO_MINT);
 
   });
+
+  it('Creates a pool', async () => {
+    // Create our pool keypair
+    const poolKeypair = anchor.web3.Keypair.generate();
+
+    //console.log("poolKeypair PK: ", poolKeypair.publicKey.toString());
+
+    // Find our pool signer PDA
+    const [poolSigner, poolNonce] = await anchor.web3.PublicKey.findProgramAddress(
+      [poolKeypair.publicKey.toBuffer()],
+      program.programId,
+    );
+
+    let stakingVault = await mintStakingToken.createAccount(poolSigner);
+    let rewardVault = await mintRewardToken.createAccount(poolSigner);
+
+
+    let poolCreatorBalanceBefore = await provider.connection.getBalance(poolCreator.publicKey);
+
+    await provider.connection.confirmTransaction(
+      await program.rpc.initializePool(
+        poolNonce,
+        new anchor.BN(1000),
+        {
+          accounts: {
+            authority: poolCreator.publicKey,
+            stakingMint: mintStakingToken.publicKey,
+            stakingVault: stakingVault,
+            rewardMint: mintRewardToken.publicKey,
+            rewardVault: rewardVault,
+            poolSigner: poolSigner,
+            pool: poolKeypair.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          },
+          signers: [poolKeypair, poolCreator]
+        }
+      ),
+      "confirmed"
+    );
+
+    let poolCreatorBalanceAfter = await provider.connection.getBalance(poolCreator.publicKey);
+    console.log("Pool Account Creation Cost: ", (poolCreatorBalanceBefore - poolCreatorBalanceAfter) / anchor.web3.LAMPORTS_PER_SOL);
+
+  });
+
+
+
 });
