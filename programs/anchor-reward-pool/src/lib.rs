@@ -230,6 +230,47 @@ pub mod anchor_reward_pool {
 
         Ok(())
     }
+
+    pub fn claim_reward(ctx: Context<ClaimReward>) -> ProgramResult {
+        let total_staked = ctx.accounts.staking_vault.amount;
+
+        let pool = &mut ctx.accounts.pool;
+        let user_opt = Some(&mut ctx.accounts.user);
+        update_rewards(pool, user_opt, total_staked).unwrap();
+
+        let seeds = &[
+            ctx.accounts.pool.to_account_info().key.as_ref(),
+            &[ctx.accounts.pool.nonce],
+        ];
+        let pool_signer = &[&seeds[..]];
+
+        if ctx.accounts.user.reward_per_token_pending > 0 {
+            let mut reward_amount = ctx.accounts.user.reward_per_token_pending;
+            let vault_balance = ctx.accounts.reward_vault.amount;
+
+            ctx.accounts.user.reward_per_token_pending = 0;
+            if vault_balance < reward_amount {
+                reward_amount = vault_balance;
+            }
+
+            if reward_amount > 0 {
+                let cpi_context = CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    token::Transfer {
+                        from: ctx.accounts.reward_vault.to_account_info(),
+                        to: ctx.accounts.to_reward_account.to_account_info(),
+                        authority: ctx.accounts.pool_signer.to_account_info(),
+                    },
+                    pool_signer,
+                );
+
+                token::transfer(cpi_context, reward_amount)?;
+            }
+        }
+
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -319,17 +360,46 @@ pub struct Fund<'info> {
         has_one = reward_vault,
     )]
     pool: Account<'info, Pool>,
-    #[account(mut)] // Why does this need to be mut?
     staking_vault: Account<'info, TokenAccount>,
     #[account(mut)]
     reward_vault: Account<'info, TokenAccount>,
     #[account(
-        // require signed funder auth - otherwise constant micro fun could hold funds hostage. TODO: Understand this better
+        // require signed funder auth - otherwise constant micro funds could hold funds hostage. TODO: Understand this better
         constraint = funder.key() == pool.authority,
     )]
     funder: Signer<'info>,
     #[account(mut)]
     from: Account<'info, TokenAccount>,
+    #[account(
+        seeds = [pool.to_account_info().key.as_ref()],
+        bump = pool.nonce,
+    )]
+    pool_signer: SystemAccount<'info>,
+    token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimReward<'info> {
+    #[account(
+        mut,
+        has_one = staking_vault,
+        has_one = reward_vault,
+    )]
+    pool: Account<'info, Pool>,
+    staking_vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    reward_vault: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        has_one = owner,
+        has_one = pool,
+        seeds = [owner.to_account_info().key.as_ref(), pool.to_account_info().key.as_ref()],
+        bump = user.nonce,
+    )]
+    user: Account<'info, User>,
+    owner: Signer<'info>,
+    #[account(mut)]
+    to_reward_account: Account<'info, TokenAccount>,
     #[account(
         seeds = [pool.to_account_info().key.as_ref()],
         bump = pool.nonce,

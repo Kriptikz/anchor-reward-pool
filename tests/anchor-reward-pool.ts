@@ -223,7 +223,7 @@ describe('anchor-reward-pool', () => {
   it('User1 Stakes 200 tokens to Pool1', async () => {
     await provider.connection.confirmTransaction(
       await program.rpc.stake(
-        new anchor.BN(200 * (10 ** DECIMALS)),
+        new anchor.BN(100 * (10 ** DECIMALS)),
         {
           accounts: {
             pool: pool1Keypair.publicKey,
@@ -244,6 +244,35 @@ describe('anchor-reward-pool', () => {
     await printPoolAccountData(pool1Keypair.publicKey);
   });
 
+  it('User1 Claims Rewards', async () => {
+    await wait(10);
+    
+    await provider.connection.confirmTransaction(
+      await program.rpc.claimReward(
+        {
+          accounts: {
+            pool: pool1Keypair.publicKey,
+            stakingVault: pool1StakeVault,
+            rewardVault: pool1RewardVault,
+            user: user1UserAccountAddress,
+            owner: user1.publicKey,
+            toRewardAccount: user1RewardTokenAccount,
+            poolSigner: pool1Signer,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          },
+          signers: [user1]
+        }
+      ),
+      "confirmed"
+    );
+
+    await printUserAccountData(user1UserAccountAddress);
+    await printPoolAccountData(pool1Keypair.publicKey);
+
+    let userRewardTokens = (await mintRewardToken.getAccountInfo(user1RewardTokenAccount)).amount;
+    console.log("User Reward Tokens: ", userRewardTokens.toNumber() / (10 ** DECIMALS));
+  });
+
 
 
   // Utility Functions
@@ -251,7 +280,7 @@ describe('anchor-reward-pool', () => {
     let userAccount = await program.account.user.fetch(userAccountAddress);
     let poolPubkey = userAccount.pool.toString();
     let owner = userAccount.owner.toString();
-    let rewardPerTokenComplete = userAccount.rewardPerTokenComplete.toNumber();
+    let rewardPerTokenComplete = userAccount.rewardPerTokenComplete.toString();
     let rewardPerTokenPending = userAccount.rewardPerTokenPending.toNumber();
     let balanceStaked = userAccount.balanceStaked.toNumber();
 
@@ -260,7 +289,7 @@ describe('anchor-reward-pool', () => {
     console.log("owner: ", owner);
     console.log("Reward Per Token Complete: ", rewardPerTokenComplete);
     console.log("Reward Per Token Pending: ", rewardPerTokenPending);
-    console.log("Balance Staked: ", balanceStaked);
+    console.log("Balance Staked: ", balanceStaked / (10 ** DECIMALS));
   }
 
   async function printPoolAccountData(poolAccountAddress) {
@@ -271,7 +300,7 @@ describe('anchor-reward-pool', () => {
     let rewardDurationEnd = poolAccount.rewardDurationEnd.toNumber();
     let lastUpdateTime = poolAccount.lastUpdateTime.toNumber();
     let rewardRate = poolAccount.rewardRate.toNumber();
-    let rewardPerTokenStored = poolAccount.rewardPerTokenStored.toNumber();
+    let rewardPerTokenStored = poolAccount.rewardPerTokenStored.toString();
     let usersStaked = poolAccount.userStakeCount;
 
     console.log("----- Pool Account Data -----")
@@ -282,7 +311,7 @@ describe('anchor-reward-pool', () => {
     console.log("Reward Duration End: ", rewardDurationEnd);
     console.log("Last Update Time: ", lastUpdateTime);
     console.log("Reward Rate: ", rewardRate / (10 ** DECIMALS));
-    console.log("Reward Per Token Stored: ", rewardPerTokenStored / (10 ** DECIMALS));
+    console.log("Reward Per Token Stored: ", rewardPerTokenStored);
     console.log("Users Staked: ", usersStaked);
 
   }
