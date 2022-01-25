@@ -30,6 +30,14 @@ describe('anchor-reward-pool', () => {
   // Create our pool keypair
   const pool1Keypair = anchor.web3.Keypair.generate();
 
+  // Declare our pool signer
+  let pool1Signer;
+  let pool1SignerNonce;
+
+  // Declare our pool vaults
+  let pool1StakeVault;
+  let pool1RewardVault;
+
   // Declare the mint for our Reward Token
   let mintRewardToken;
 
@@ -41,6 +49,10 @@ describe('anchor-reward-pool', () => {
   let user1RewardTokenAccount;
 
   let poolCreatorRewardTokenAccount;
+
+  // Declare our user's User Account
+  let user1UserAccountAddress;
+  let user1UserAccountNonce;
 
   it('Test Set Up!', async () => {
     // Airdrop 5 Sol to payer, mintAuthority, poolCreator, and user
@@ -119,29 +131,29 @@ describe('anchor-reward-pool', () => {
   it('Creates a pool', async () => {
 
     // Find our pool signer PDA
-    const [poolSigner, poolNonce] = await anchor.web3.PublicKey.findProgramAddress(
+    [pool1Signer, pool1SignerNonce] = await anchor.web3.PublicKey.findProgramAddress(
       [pool1Keypair.publicKey.toBuffer()],
       program.programId,
     );
 
-    let stakingVault = await mintStakingToken.createAccount(poolSigner);
-    let rewardVault = await mintRewardToken.createAccount(poolSigner);
+    pool1StakeVault = await mintStakingToken.createAccount(pool1Signer);
+    pool1RewardVault = await mintRewardToken.createAccount(pool1Signer);
 
 
     let poolCreatorBalanceBefore = await provider.connection.getBalance(poolCreator.publicKey);
 
     await provider.connection.confirmTransaction(
       await program.rpc.initializePool(
-        poolNonce,
+        pool1SignerNonce,
         new anchor.BN(1000),
         {
           accounts: {
             authority: poolCreator.publicKey,
             stakingMint: mintStakingToken.publicKey,
-            stakingVault: stakingVault,
+            stakingVault: pool1StakeVault,
             rewardMint: mintRewardToken.publicKey,
-            rewardVault: rewardVault,
-            poolSigner: poolSigner,
+            rewardVault: pool1RewardVault,
+            poolSigner: pool1Signer,
             pool: pool1Keypair.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: anchor.web3.SystemProgram.programId,
@@ -152,13 +164,38 @@ describe('anchor-reward-pool', () => {
       "confirmed"
     );
 
+    await printPoolAccountData(pool1Keypair.publicKey);
+
     let poolCreatorBalanceAfter = await provider.connection.getBalance(poolCreator.publicKey);
     console.log("Pool Account Creation Cost: ", (poolCreatorBalanceBefore - poolCreatorBalanceAfter) / anchor.web3.LAMPORTS_PER_SOL);
 
   });
 
-  it('Creates a Staking Account for the User', async () => {
-    const [user1UserAccountAddress, user1UserAccountNonce] = await anchor.web3.PublicKey.findProgramAddress(
+  it('Funds a pool', async () => {
+    await provider.connection.confirmTransaction(
+      await program.rpc.fund(
+        new anchor.BN(1000 * (10 ** DECIMALS)),
+        {
+          accounts: {
+            pool: pool1Keypair.publicKey,
+            stakingVault: pool1StakeVault,
+            rewardVault: pool1RewardVault,
+            funder: poolCreator.publicKey,
+            from: poolCreatorRewardTokenAccount,
+            poolSigner: pool1Signer,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          },
+          signers: [poolCreator]
+        }
+      ),
+      "confirmed"
+    );
+
+    await printPoolAccountData(pool1Keypair.publicKey);
+  });
+
+  it('Creates a User Account for User1', async () => {
+    [user1UserAccountAddress, user1UserAccountNonce] = await anchor.web3.PublicKey.findProgramAddress(
       [user1.publicKey.toBuffer(), pool1Keypair.publicKey.toBuffer()],
       program.programId
     )
@@ -183,6 +220,32 @@ describe('anchor-reward-pool', () => {
 
   });
 
+  it('User1 Stakes 200 tokens to Pool1', async () => {
+    await provider.connection.confirmTransaction(
+      await program.rpc.stake(
+        new anchor.BN(200 * (10 ** DECIMALS)),
+        {
+          accounts: {
+            pool: pool1Keypair.publicKey,
+            stakingVault: pool1StakeVault,
+            user: user1UserAccountAddress,
+            owner: user1.publicKey,
+            stakeFromAccount: user1StakingTokenAccount,
+            poolSigner: pool1Signer,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          },
+          signers: [user1]
+        }
+      ),
+      "confirmed"
+    );
+
+    await printUserAccountData(user1UserAccountAddress);
+    await printPoolAccountData(pool1Keypair.publicKey);
+  });
+
+
+
   // Utility Functions
   async function printUserAccountData(userAccountAddress) {
     let userAccount = await program.account.user.fetch(userAccountAddress);
@@ -198,6 +261,38 @@ describe('anchor-reward-pool', () => {
     console.log("Reward Per Token Complete: ", rewardPerTokenComplete);
     console.log("Reward Per Token Pending: ", rewardPerTokenPending);
     console.log("Balance Staked: ", balanceStaked);
+  }
+
+  async function printPoolAccountData(poolAccountAddress) {
+    let poolAccount = await program.account.pool.fetch(poolAccountAddress);
+    let stakedAmount = (await mintStakingToken.getAccountInfo(poolAccount.stakingVault)).amount.toNumber();
+    let rewardAmount = (await mintRewardToken.getAccountInfo(poolAccount.rewardVault)).amount.toNumber();
+    let rewardDuration = poolAccount.rewardDuration.toNumber();
+    let rewardDurationEnd = poolAccount.rewardDurationEnd.toNumber();
+    let lastUpdateTime = poolAccount.lastUpdateTime.toNumber();
+    let rewardRate = poolAccount.rewardRate.toNumber();
+    let rewardPerTokenStored = poolAccount.rewardPerTokenStored.toNumber();
+    let usersStaked = poolAccount.userStakeCount;
+
+    console.log("----- Pool Account Data -----")
+    console.log("Pool Pubkey: ", poolAccountAddress.toString());
+    console.log("Staked Amount: ", stakedAmount / (10 ** DECIMALS));
+    console.log("Reward Amount: ", rewardAmount / (10 ** DECIMALS));
+    console.log("Reward Duration: ", rewardDuration);
+    console.log("Reward Duration End: ", rewardDurationEnd);
+    console.log("Last Update Time: ", lastUpdateTime);
+    console.log("Reward Rate: ", rewardRate / (10 ** DECIMALS));
+    console.log("Reward Per Token Stored: ", rewardPerTokenStored / (10 ** DECIMALS));
+    console.log("Users Staked: ", usersStaked);
+
+  }
+
+  async function wait(seconds) {
+    while(seconds > 0) {
+      console.log("countdown " + seconds--);
+      await new Promise(a=>setTimeout(a, 1000))
+    }
+    console.log("Wait Over");
   }
 
 });
