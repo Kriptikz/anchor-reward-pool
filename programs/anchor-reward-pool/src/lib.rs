@@ -78,6 +78,43 @@ pub mod anchor_reward_pool {
         Ok(())
     }
 
+    pub fn unstake(ctx: Context<Stake>, amount: u64) -> ProgramResult {
+        if amount == 0 {
+            return Err(ErrorCode::AmountMustBeGreaterThanZero.into());
+        }
+
+        let pool = &mut ctx.accounts.pool;
+        let total_staked = ctx.accounts.staking_vault.amount;
+
+        if ctx.accounts.user.balance_staked < amount {
+            return Err(ErrorCode::InsufficientFundUnstake.into());
+        }
+
+        let user_opt = Some(&mut ctx.accounts.user);
+        pool.update_rewards(user_opt, total_staked).unwrap();
+        ctx.accounts.user.balance_staked = ctx.accounts.user.balance_staked.checked_sub(amount).unwrap();
+
+        // Transfer tokens from the pool vault to the user
+        {
+            let seeds = &[pool.to_account_info().key.as_ref(), &[pool.nonce]];
+            let pool_signer = &[&seeds[..]];
+
+            let cpi_context = CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                token::Transfer {
+                    from: ctx.accounts.staking_vault.to_account_info(),
+                    to: ctx.accounts.stake_from_account.to_account_info(),
+                    authority: ctx.accounts.staking_vault.to_account_info(),
+                },
+                pool_signer,
+            );
+
+            token::transfer(cpi_context, amount)?;
+        }
+
+        Ok(())
+    }
+
     pub fn fund(ctx: Context<Fund>, amount: u64) -> ProgramResult {
         let pool = &mut ctx.accounts.pool;
         let total_staked = ctx.accounts.staking_vault.amount;
@@ -460,4 +497,6 @@ pub struct User {
 pub enum ErrorCode {
     #[msg("Amount must be greater than zero.")]
     AmountMustBeGreaterThanZero,
+    #[msg("Insufficient funds to unstake.")]
+    InsufficientFundUnstake,
 }
