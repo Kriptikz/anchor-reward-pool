@@ -7,122 +7,6 @@ use std::convert::TryInto;
 
 declare_id!("7xpwc6uLVzToRuPwser2aD3cDYMKtsjFWMe4yTUMSMYp");
 
-const PRECISION: u128 = u64::MAX as u128;
-const SECONDS_IN_YEAR: u64 = 365 * 24 * 60 * 60;
-
-pub fn update_rewards(
-    pool: &mut Account<Pool>,
-    user: Option<&mut Account<User>>,
-    total_staked: u64,
-) -> ProgramResult {
-    let last_time_reward_applicable = last_time_reward_applicable(pool.reward_duration_end);
-
-    let reward = calc_reward_per_token(pool, total_staked, last_time_reward_applicable);
-
-    pool.reward_per_token_stored = reward;
-
-    pool.last_update_time = last_time_reward_applicable;
-
-    if let Some(user) = user {
-        let earned_amount = calc_user_earned_amount(pool, user);
-
-        user.reward_per_token_pending = earned_amount;
-        user.reward_per_token_complete = pool.reward_per_token_stored;
-    }
-
-    Ok(())
-}
-
-fn last_time_reward_applicable(reward_duration_end: u64) -> u64 {
-    let c = anchor_lang::solana_program::clock::Clock::get().unwrap();
-    std::cmp::min(c.unix_timestamp.try_into().unwrap(), reward_duration_end)
-}
-
-fn calc_reward_per_token(
-    pool: &Account<Pool>, 
-    total_staked: u64, 
-    last_time_reward_applicable: u64
-) -> u128 {
-    if total_staked == 0 {
-        return pool.reward_per_token_stored;
-    }
-
-    let time_period = U192::from(last_time_reward_applicable)
-        .checked_sub(pool.last_update_time.into())
-        .unwrap();
-
-    pool
-        .reward_per_token_stored
-        .checked_add(
-            time_period
-                .checked_mul(pool.reward_rate.into())
-                .unwrap()
-                .checked_mul(PRECISION.into())
-                .unwrap()
-                .checked_div(SECONDS_IN_YEAR.into())
-                .unwrap()
-                .checked_div(total_staked.into())
-                .unwrap()
-                .try_into()
-                .unwrap()
-        )
-        .unwrap()
-}
-
-fn calc_user_earned_amount(
-    pool: &Account<Pool>,
-    user: &Account<User>,
-) -> u64 {
-    (user.balance_staked as u128)
-        .checked_mul(
-            (pool.reward_per_token_stored as u128)
-                .checked_sub(user.reward_per_token_complete as u128)
-                .unwrap(),
-        )
-        .unwrap()
-        .checked_div(PRECISION)
-        .unwrap()
-        .checked_add(user.reward_per_token_pending as u128)
-        .unwrap()
-        .try_into()
-        .unwrap()
-}
-
-fn calc_rate_after_funding(
-    pool: &mut Account<Pool>,
-    amount: u64,
-) -> Result<u64> {
-    let current_time = anchor_lang::solana_program::clock::Clock::get()
-        .unwrap()
-        .unix_timestamp
-        .try_into()
-        .unwrap();
-    let reward_period_end = pool.reward_duration_end;
-
-    let annual_multiplier = SECONDS_IN_YEAR.checked_div(pool.reward_duration).unwrap();
-    let rate: u64;
-
-    if current_time >= reward_period_end {
-        rate = amount.checked_mul(annual_multiplier).unwrap();
-    } else {
-        let remaining_seconds = reward_period_end.checked_sub(current_time).unwrap();
-        let leftover: u64 = (remaining_seconds as u128)
-            .checked_mul(pool.reward_rate.into())
-            .unwrap()
-            .checked_div(SECONDS_IN_YEAR.into())
-            .unwrap()
-            .try_into()
-            .unwrap();
-        rate = amount
-            .checked_add(leftover)
-            .unwrap()
-            .checked_mul(annual_multiplier)
-            .unwrap();
-    }
-
-    Ok(rate)
-}
-
 #[program]
 pub mod anchor_reward_pool {
     use super::*;
@@ -176,7 +60,7 @@ pub mod anchor_reward_pool {
         let total_staked = ctx.accounts.staking_vault.amount;
 
         let user_opt = Some(&mut ctx.accounts.user);
-        update_rewards(pool, user_opt, total_staked).unwrap();
+        pool.update_rewards(user_opt, total_staked).unwrap();
 
         ctx.accounts.user.balance_staked = ctx.accounts.user.balance_staked.checked_add(amount).unwrap();
 
@@ -197,10 +81,9 @@ pub mod anchor_reward_pool {
     pub fn fund(ctx: Context<Fund>, amount: u64) -> ProgramResult {
         let pool = &mut ctx.accounts.pool;
         let total_staked = ctx.accounts.staking_vault.amount;
-        update_rewards(pool, None, total_staked).unwrap();
+        pool.update_rewards(None, total_staked).unwrap();
 
-        let reward_rate = calc_rate_after_funding(
-            pool,
+        let reward_rate = pool.calc_rate_after_funding(
             amount,
         )?;
         pool.reward_rate = reward_rate;
@@ -236,7 +119,7 @@ pub mod anchor_reward_pool {
 
         let pool = &mut ctx.accounts.pool;
         let user_opt = Some(&mut ctx.accounts.user);
-        update_rewards(pool, user_opt, total_staked).unwrap();
+        pool.update_rewards(user_opt, total_staked).unwrap();
 
         let seeds = &[
             ctx.accounts.pool.to_account_info().key.as_ref(),
@@ -436,6 +319,124 @@ pub struct Pool {
     reward_per_token_stored: u128,
     // Users staked
     user_stake_count: u32,
+}
+
+impl Pool {
+    const PRECISION: u128 = u64::MAX as u128;
+    const SECONDS_IN_YEAR: u64 = 365 * 24 * 60 * 60;
+
+    fn update_rewards(
+        &mut self,
+        user: Option<&mut Account<User>>,
+        total_staked: u64,
+    ) -> ProgramResult {
+        let last_time_reward_applicable = Pool::last_time_reward_applicable(self.reward_duration_end);
+    
+        let reward = self.calc_reward_per_token(total_staked, last_time_reward_applicable);
+    
+        self.reward_per_token_stored = reward;
+    
+        self.last_update_time = last_time_reward_applicable;
+    
+        if let Some(user) = user {
+            let earned_amount = self.calc_user_earned_amount(user);
+    
+            user.reward_per_token_pending = earned_amount;
+            user.reward_per_token_complete = self.reward_per_token_stored;
+        }
+    
+        Ok(())
+    }
+
+    fn calc_reward_per_token(
+        &self,
+        total_staked: u64, 
+        last_time_reward_applicable: u64
+    ) -> u128 {
+        if total_staked == 0 {
+            return self.reward_per_token_stored;
+        }
+    
+        let time_period = U192::from(last_time_reward_applicable)
+            .checked_sub(self.last_update_time.into())
+            .unwrap();
+    
+        self
+            .reward_per_token_stored
+            .checked_add(
+                time_period
+                    .checked_mul(self.reward_rate.into())
+                    .unwrap()
+                    .checked_mul(Pool::PRECISION.into())
+                    .unwrap()
+                    .checked_div(Pool::SECONDS_IN_YEAR.into())
+                    .unwrap()
+                    .checked_div(total_staked.into())
+                    .unwrap()
+                    .try_into()
+                    .unwrap()
+            )
+            .unwrap()
+    }
+
+    fn calc_user_earned_amount(
+        &self,
+        user: &Account<User>,
+    ) -> u64 {
+        (user.balance_staked as u128)
+            .checked_mul(
+                (self.reward_per_token_stored as u128)
+                    .checked_sub(user.reward_per_token_complete as u128)
+                    .unwrap(),
+            )
+            .unwrap()
+            .checked_div(Pool::PRECISION)
+            .unwrap()
+            .checked_add(user.reward_per_token_pending as u128)
+            .unwrap()
+            .try_into()
+            .unwrap()
+    }
+
+    fn calc_rate_after_funding(
+        &mut self,
+        amount: u64,
+    ) -> Result<u64> {
+        let current_time = anchor_lang::solana_program::clock::Clock::get()
+            .unwrap()
+            .unix_timestamp
+            .try_into()
+            .unwrap();
+        let reward_period_end = self.reward_duration_end;
+    
+        let annual_multiplier = Pool::SECONDS_IN_YEAR.checked_div(self.reward_duration).unwrap();
+        let rate: u64;
+    
+        if current_time >= reward_period_end {
+            rate = amount.checked_mul(annual_multiplier).unwrap();
+        } else {
+            let remaining_seconds = reward_period_end.checked_sub(current_time).unwrap();
+            let leftover: u64 = (remaining_seconds as u128)
+                .checked_mul(self.reward_rate.into())
+                .unwrap()
+                .checked_div(Pool::SECONDS_IN_YEAR.into())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            rate = amount
+                .checked_add(leftover)
+                .unwrap()
+                .checked_mul(annual_multiplier)
+                .unwrap();
+        }
+    
+        Ok(rate)
+    }
+
+    fn last_time_reward_applicable(reward_duration_end: u64) -> u64 {
+        let c = anchor_lang::solana_program::clock::Clock::get().unwrap();
+        std::cmp::min(c.unix_timestamp.try_into().unwrap(), reward_duration_end)
+    }
 }
 
 #[account]
